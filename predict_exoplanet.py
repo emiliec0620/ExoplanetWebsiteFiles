@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import re
-from train_python_model import TransitCNN, simulate_light_curve
+from train_python_model import TransitCNN
 
 def parse_sexagesimal_coord(coord_str):
     """Parse sexagesimal coordinates (RA or Dec) to decimal degrees."""
