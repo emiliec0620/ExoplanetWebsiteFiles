@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Star Database Visualization</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+        
+        #addStarBtn {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            border: none;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        #addStarBtn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+        }
+        
+        #starInfo {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            backdrop-filter: blur(10px);
+            max-width: 300px;
+            display: none;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+            backdrop-filter: blur(10px);
+            font-size: 14px;
+        }
+        
+        .popup-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .popup-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        .close-btn {
+            float: right;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: #4ecdc4;
+        }
+        
+        .submit-btn {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+        
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="controls">
+            <h2>🌟 Star Database</h2>
+            <button id="addStarBtn">Add New Star</button>
+            <p>Stars in database: <span id="starCount">0</span></p>
+        </div>
+        
+        <div id="starInfo">
+            <h3>Star Information</h3>
+            <div id="starDetails"></div>
+        </div>
+        
+        <div id="instructions">
+            <strong>Controls:</strong><br>
+            • Left click + drag: Rotate view<br>
+            • Right click + drag: Pan view<br>
+            • Scroll: Zoom in/out<br>
+            • Click on stars: View details
+        </div>
+    </div>
+    
+    <!-- Add Star Popup -->
+    <div id="addStarPopup" class="popup-overlay">
+        <div class="popup-content">
+            <span class="close-btn" id="closePopup">&times;</span>
+            <h2>Add New Star</h2>
+            <form id="addStarForm">
+                <div class="form-group">
+                    <label for="starName">Star Name:</label>
+                    <input type="text" id="starName" name="name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="starType">Star Type:</label>
+                    <select id="starType" name="type" required>
+                        <option value="red_dwarf">Red Dwarf</option>
+                        <option value="yellow_dwarf">Yellow Dwarf (G-type)</option>
+                        <option value="blue_giant">Blue Giant</option>
+                        <option value="red_giant">Red Giant</option>
+                        <option value="white_dwarf">White Dwarf</option>
+                        <option value="neutron_star">Neutron Star</option>
+                        <option value="supergiant">Supergiant</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="starMass">Mass (Solar Masses):</label>
+                    <input type="number" id="starMass" name="mass" step="0.1" min="0.1" max="100" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="starRadius">Radius (Solar Radii):</label>
+                    <input type="number" id="starRadius" name="radius" step="0.1" min="0.1" max="1000" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="starTemperature">Temperature (K):</label>
+                    <input type="number" id="starTemperature" name="temperature" step="100" min="1000" max="50000" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="starLuminosity">Luminosity (Solar Luminosities):</label>
+                    <input type="number" id="starLuminosity" name="luminosity" step="0.1" min="0.001" max="1000000" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="starDistance">Distance (Light Years):</label>
+                    <input type="number" id="starDistance" name="distance" step="0.1" min="0.1" max="100000" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="starDescription">Description:</label>
+                    <input type="text" id="starDescription" name="description" placeholder="Optional description">
+                </div>
+                
+                <button type="submit" class="submit-btn">Add Star to Database</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <script>
+        // Star Database Simulation
+        class StarDatabase {
+            constructor() {
+                this.stars = [];
+                this.loadSampleData();
+            }
+            
+            loadSampleData() {
+                // Add some sample stars
+                this.addStar({
+                    name: "Sun",
+                    type: "yellow_dwarf",
+                    mass: 1.0,
+                    radius: 1.0,
+                    temperature: 5778,
+                    luminosity: 1.0,
+                    distance: 0,
+                    description: "Our home star"
+                });
+                
+                this.addStar({
+                    name: "Proxima Centauri",
+                    type: "red_dwarf",
+                    mass: 0.12,
+                    radius: 0.15,
+                    temperature: 3042,
+                    luminosity: 0.0017,
+                    distance: 4.24,
+                    description: "Closest star to the Sun"
+                });
+                
+                this.addStar({
+                    name: "Sirius A",
+                    type: "blue_giant",
+                    mass: 2.06,
+                    radius: 1.71,
+                    temperature: 9940,
+                    luminosity: 25.4,
+                    distance: 8.66,
+                    description: "Brightest star in the night sky"
+                });
+                
+                this.addStar({
+                    name: "Betelgeuse",
+                    type: "red_giant",
+                    mass: 11.6,
+                    radius: 887,
+                    temperature: 3500,
+                    luminosity: 126000,
+                    distance: 640,
+                    description: "Red supergiant in Orion"
+                });
+            }
+            
+            addStar(starData) {
+                const star = {
+                    id: Date.now() + Math.random(),
+                    ...starData,
+                    x: (Math.random() - 0.5) * 200,
+                    y: (Math.random() - 0.5) * 200,
+                    z: (Math.random() - 0.5) * 200
+                };
+                this.stars.push(star);
+                return star;
+            }
+            
+            getAllStars() {
+                return this.stars;
+            }
+            
+            getStarById(id) {
+                return this.stars.find(star => star.id === id);
+            }
+        }
+        
+        // 3D Star Visualization
+        class StarVisualizer {
+            constructor() {
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.controls = null;
+                this.starMeshes = [];
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+                this.selectedStar = null;
+                
+                this.init();
+            }
+            
+            init() {
+                // Setup renderer
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setClearColor(0x000011);
+                document.getElementById('container').appendChild(this.renderer.domElement);
+                
+                // Setup camera
+                this.camera.position.set(0, 0, 100);
+                
+                // Setup controls
+                this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.dampingFactor = 0.05;
+                
+                // Add ambient light
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.3);
+                this.scene.add(ambientLight);
+                
+                // Add directional light
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
+                directionalLight.position.set(1, 1, 1);
+                this.scene.add(directionalLight);
+                
+                // Add background stars
+                this.createBackgroundStars();
+                
+                // Setup event listeners
+                this.setupEventListeners();
+                
+                // Start render loop
+                this.animate();
+            }
+            
+            createBackgroundStars() {
+                const backgroundGeometry = new THREE.BufferGeometry();
+                const backgroundMaterial = new THREE.PointsMaterial({
+                    color: 0xffffff,
+                    size: 0.5,
+                    transparent: true,
+                    opacity: 0.6
+                });
+                
+                const backgroundVertices = [];
+                for (let i = 0; i < 1000; i++) {
+                    backgroundVertices.push(
+                        (Math.random() - 0.5) * 2000,
+                        (Math.random() - 0.5) * 2000,
+                        (Math.random() - 0.5) * 2000
+                    );
+                }
+                
+                backgroundGeometry.setAttribute('position', new THREE.Float32BufferAttribute(backgroundVertices, 3));
+                const backgroundStars = new THREE.Points(backgroundGeometry, backgroundMaterial);
+                this.scene.add(backgroundStars);
+            }
+            
+            createStarMesh(star) {
+                const starTypeColors = {
+                    red_dwarf: 0xff4444,
+                    yellow_dwarf: 0xffff44,
+                    blue_giant: 0x4444ff,
+                    red_giant: 0xff6666,
+                    white_dwarf: 0xffffff,
+                    neutron_star: 0x8888ff,
+                    supergiant: 0xff8844
+                };
+                
+                const geometry = new THREE.SphereGeometry(star.radius * 0.5 + 1, 16, 16);
+                const material = new THREE.MeshPhongMaterial({
+                    color: starTypeColors[star.type] || 0xffffff,
+                    emissive: starTypeColors[star.type] || 0xffffff,
+                    emissiveIntensity: 0.3,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(star.x, star.y, star.z);
+                mesh.userData = { star: star };
+                
+                // Add glow effect
+                const glowGeometry = new THREE.SphereGeometry(star.radius * 0.8 + 2, 16, 16);
+                const glowMaterial = new THREE.MeshBasicMaterial({
+                    color: starTypeColors[star.type] || 0xffffff,
+                    transparent: true,
+                    opacity: 0.1
+                });
+                const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+                glow.position.set(star.x, star.y, star.z);
+                glow.userData = { star: star };
+                
+                this.scene.add(mesh);
+                this.scene.add(glow);
+                
+                return { mesh, glow };
+            }
+            
+            addStar(star) {
+                const starMeshes = this.createStarMesh(star);
+                this.starMeshes.push(starMeshes);
+                this.updateStarCount();
+            }
+            
+            updateStarCount() {
+                document.getElementById('starCount').textContent = this.starMeshes.length;
+            }
+            
+            setupEventListeners() {
+                // Mouse click for star selection
+                this.renderer.domElement.addEventListener('click', (event) => {
+                    this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                    this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                    
+                    this.raycaster.setFromCamera(this.mouse, this.camera);
+                    const intersects = this.raycaster.intersectObjects(
+                        this.starMeshes.map(sm => sm.mesh)
+                    );
+                    
+                    if (intersects.length > 0) {
+                        const selectedMesh = intersects[0].object;
+                        this.selectStar(selectedMesh.userData.star);
+                    } else {
+                        this.deselectStar();
+                    }
+                });
+                
+                // Window resize
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+            
+            selectStar(star) {
+                this.selectedStar = star;
+                this.showStarInfo(star);
+            }
+            
+            deselectStar() {
+                this.selectedStar = null;
+                this.hideStarInfo();
+            }
+            
+            showStarInfo(star) {
+                const starInfo = document.getElementById('starInfo');
+                const starDetails = document.getElementById('starDetails');
+                
+                starDetails.innerHTML = `
+                    <p><strong>Name:</strong> ${star.name}</p>
+                    <p><strong>Type:</strong> ${star.type.replace('_', ' ').toUpperCase()}</p>
+                    <p><strong>Mass:</strong> ${star.mass} Solar Masses</p>
+                    <p><strong>Radius:</strong> ${star.radius} Solar Radii</p>
+                    <p><strong>Temperature:</strong> ${star.temperature.toLocaleString()} K</p>
+                    <p><strong>Luminosity:</strong> ${star.luminosity.toLocaleString()} Solar Luminosities</p>
+                    <p><strong>Distance:</strong> ${star.distance} Light Years</p>
+                    ${star.description ? `<p><strong>Description:</strong> ${star.description}</p>` : ''}
+                `;
+                
+                starInfo.style.display = 'block';
+            }
+            
+            hideStarInfo() {
+                document.getElementById('starInfo').style.display = 'none';
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                // Rotate stars slowly
+                this.starMeshes.forEach(starMeshes => {
+                    starMeshes.mesh.rotation.y += 0.005;
+                    starMeshes.glow.rotation.y += 0.005;
+                });
+                
+                this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+        
+        // Initialize application
+        const database = new StarDatabase();
+        const visualizer = new StarVisualizer();
+        
+        // Load existing stars
+        database.getAllStars().forEach(star => {
+            visualizer.addStar(star);
+        });
+        
+        // Popup functionality
+        const addStarBtn = document.getElementById('addStarBtn');
+        const addStarPopup = document.getElementById('addStarPopup');
+        const closePopup = document.getElementById('closePopup');
+        const addStarForm = document.getElementById('addStarForm');
+        
+        addStarBtn.addEventListener('click', () => {
+            addStarPopup.style.display = 'flex';
+        });
+        
+        closePopup.addEventListener('click', () => {
+            addStarPopup.style.display = 'none';
+        });
+        
+        addStarPopup.addEventListener('click', (e) => {
+            if (e.target === addStarPopup) {
+                addStarPopup.style.display = 'none';
+            }
+        });
+        
+        addStarForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(addStarForm);
+            const starData = {
+                name: formData.get('name'),
+                type: formData.get('type'),
+                mass: parseFloat(formData.get('mass')),
+                radius: parseFloat(formData.get('radius')),
+                temperature: parseInt(formData.get('temperature')),
+                luminosity: parseFloat(formData.get('luminosity')),
+                distance: parseFloat(formData.get('distance')),
+                description: formData.get('description')
+            };
+            
+            // Add to database
+            const newStar = database.addStar(starData);
+            
+            // Add to visualization
+            visualizer.addStar(newStar);
+            
+            // Close popup and reset form
+            addStarPopup.style.display = 'none';
+            addStarForm.reset();
+            
+            // Show success message
+            alert(`Star "${newStar.name}" added successfully!`);
+        });
+    </script>
+</body>
+</html>
