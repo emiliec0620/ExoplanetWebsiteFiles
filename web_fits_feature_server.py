@@ -130,7 +130,7 @@ def index():
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FITS Feature Extractor</title>
+    <title>Exoplanet Detection Analyzer</title>
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 24px; max-width: 900px; margin: auto; }
       .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; }
@@ -143,12 +143,12 @@ def index():
   </head>
   <body>
     <div class="card">
-      <h1>FITS Feature Extractor</h1>
-      <p>Upload a .fits light curve file. The server will resample the flux to 2048 points and extract features.</p>
+      <h1>Exoplanet Detection Analyzer</h1>
+      <p>Upload a .fits light curve file to get AI-powered exoplanet detection analysis using Random Forest machine learning and Gemini AI.</p>
       <form id="upload-form">
         <input id="file" type="file" name="file" accept=".fits" required />
         <br />
-        <button type="submit">Upload & Extract</button>
+        <button type="submit">Analyze for Exoplanets</button>
         <button id="open-gemini" type="button" disabled>Open in Gemini</button>
       </form>
       
@@ -158,7 +158,7 @@ def index():
         <p id="prediction-probability" style="font-size: 1rem; margin: 5px 0 0; opacity: 0.6;"></p>
       </div>
       
-      <h3>Response</h3>
+      <h3>Analysis Results</h3>
       <pre id="output"></pre>
     </div>
     <script>
@@ -183,11 +183,18 @@ def index():
         try {
           const res = await fetch('/api/extract', { method: 'POST', body: fd });
           const json = await res.json();
-          output.textContent = JSON.stringify(json, null, 2);
           
-          // Show Random Forest prediction prominently
+          // Display only the Gemini prompt and Random Forest prediction
+          let displayContent = '';
+          
           if (json.random_forest_prediction) {
             const pred = json.random_forest_prediction;
+            displayContent += `🤖 Random Forest Prediction:\n`;
+            displayContent += `Prediction: ${pred.prediction}\n`;
+            displayContent += `Confidence: ${pred.confidence}\n`;
+            displayContent += `Probability: ${(pred.probability * 100).toFixed(1)}%\n\n`;
+            
+            // Show Random Forest prediction prominently
             predictionText.textContent = pred.prediction;
             predictionConfidence.textContent = `Confidence: ${pred.confidence}`;
             predictionProbability.textContent = `Probability: ${(pred.probability * 100).toFixed(1)}%`;
@@ -206,11 +213,15 @@ def index():
           }
           
           if (json.gemini_prompt_human) {
+            displayContent += `📝 Gemini Prompt:\n${json.gemini_prompt_human}`;
             lastGeminiPrompt = json.gemini_prompt_human;
             openGeminiBtn.disabled = false;
           } else {
             openGeminiBtn.disabled = true;
           }
+          
+          output.textContent = displayContent;
+          
         } catch (err) {
           output.textContent = 'Request failed: ' + err;
           openGeminiBtn.disabled = true;
@@ -324,18 +335,6 @@ def api_extract():
     )
 
     response = {
-        "meta": meta,
-        "flux_resampled": {
-            "shape": [int(len(flux_resampled))],
-            "dtype": "float64",
-            "data": flux_list,
-        },
-        "features": {
-            "length": int(len(features_list)),
-            "dtype": "float64",
-            "data": features_list,
-        },
-        "gemini_prompt": gemini_prompt,
         "gemini_prompt_human": gemini_prompt_human
     }
     

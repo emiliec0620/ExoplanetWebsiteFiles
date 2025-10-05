@@ -83,12 +83,20 @@ def detect_device():
         print("💻 Using CPU for computation")
         return device
 
-def extract_features_vectorized(light_curves):
+def extract_features_vectorized(light_curves, force_cpu=False):
     """
     Enhanced vectorized feature extraction for multiple light curves at once.
     Uses PyTorch for GPU acceleration when available (CUDA/MPS/CPU).
+    
+    Args:
+        light_curves: Array of light curves to process
+        force_cpu: If True, forces CPU-only computation for consistent performance
     """
-    device = detect_device()
+    if force_cpu:
+        device = torch.device('cpu')
+        print("💻 Using CPU-only mode for consistent performance")
+    else:
+        device = detect_device()
     
     # Convert to PyTorch tensors with MPS-specific handling
     try:
@@ -115,40 +123,61 @@ def extract_features_vectorized(light_curves):
     std_vals = torch.std(lc_tensor, dim=1)
     min_vals = torch.min(lc_tensor, dim=1)[0]
     max_vals = torch.max(lc_tensor, dim=1)[0]
-    median_vals = torch.median(lc_tensor, dim=1)[0]
     
-    # Percentiles
-    q25_vals = torch.quantile(lc_tensor, 0.25, dim=1)
-    q75_vals = torch.quantile(lc_tensor, 0.75, dim=1)
-    q10_vals = torch.quantile(lc_tensor, 0.10, dim=1)
-    q90_vals = torch.quantile(lc_tensor, 0.90, dim=1)
+    # Percentiles (optimized with efficient sorting-based approach)
+    # Sort once and extract multiple percentiles for O(n log n) complexity
+    sorted_lc, _ = torch.sort(lc_tensor, dim=1)
+    n = sorted_lc.shape[1]
     
-    # Enhanced transit-related features
+    # Calculate percentile indices efficiently
+    q10_idx = int(0.10 * (n - 1))
+    q25_idx = int(0.25 * (n - 1))
+    median_idx = int(0.50 * (n - 1))
+    q75_idx = int(0.75 * (n - 1))
+    q90_idx = int(0.90 * (n - 1))
+    
+    q10_vals = sorted_lc[:, q10_idx]
+    q25_vals = sorted_lc[:, q25_idx]
+    median_vals = sorted_lc[:, median_idx]
+    q75_vals = sorted_lc[:, q75_idx]
+    q90_vals = sorted_lc[:, q90_idx]
+    
+    # Enhanced transit-related features (optimized)
+    # Pre-compute thresholds to avoid repeated calculations
+    mean_expanded = mean_vals.unsqueeze(1)
+    std_expanded = std_vals.unsqueeze(1)
+    
     # Multiple sigma thresholds for better transit detection
-    dips_1sigma = torch.sum(lc_tensor < (mean_vals.unsqueeze(1) - 1 * std_vals.unsqueeze(1)), dim=1)
-    dips_2sigma = torch.sum(lc_tensor < (mean_vals.unsqueeze(1) - 2 * std_vals.unsqueeze(1)), dim=1)
-    dips_3sigma = torch.sum(lc_tensor < (mean_vals.unsqueeze(1) - 3 * std_vals.unsqueeze(1)), dim=1)
+    dips_1sigma = torch.sum(lc_tensor < (mean_expanded - 1 * std_expanded), dim=1)
+    dips_2sigma = torch.sum(lc_tensor < (mean_expanded - 2 * std_expanded), dim=1)
+    dips_3sigma = torch.sum(lc_tensor < (mean_expanded - 3 * std_expanded), dim=1)
     
-    peaks_1sigma = torch.sum(lc_tensor > (mean_vals.unsqueeze(1) + 1 * std_vals.unsqueeze(1)), dim=1)
-    peaks_2sigma = torch.sum(lc_tensor > (mean_vals.unsqueeze(1) + 2 * std_vals.unsqueeze(1)), dim=1)
+    peaks_1sigma = torch.sum(lc_tensor > (mean_expanded + 1 * std_expanded), dim=1)
+    peaks_2sigma = torch.sum(lc_tensor > (mean_expanded + 2 * std_expanded), dim=1)
     
     # Transit depth calculations
     transit_depth_1sigma = (mean_vals - q10_vals) / mean_vals
     transit_depth_2sigma = (mean_vals - q25_vals) / mean_vals
     transit_depth_min = (mean_vals - min_vals) / mean_vals
     
-    # Variability metrics
+    # Variability metrics (optimized)
     variance_vals = torch.var(lc_tensor, dim=1)
-    rmse_vals = torch.sqrt(torch.mean((lc_tensor - mean_vals.unsqueeze(1))**2, dim=1))
+    rmse_vals = torch.sqrt(torch.mean((lc_tensor - mean_expanded)**2, dim=1))
     
-    # Skewness and Kurtosis (higher moments)
-    skewness = torch.mean(((lc_tensor - mean_vals.unsqueeze(1)) / std_vals.unsqueeze(1))**3, dim=1)
-    kurtosis = torch.mean(((lc_tensor - mean_vals.unsqueeze(1)) / std_vals.unsqueeze(1))**4, dim=1)
+    # Skewness and Kurtosis (higher moments) - optimized
+    normalized_lc = (lc_tensor - mean_expanded) / std_expanded
+    skewness = torch.mean(normalized_lc**3, dim=1)
+    kurtosis = torch.mean(normalized_lc**4, dim=1)
     
-    # FFT features (enhanced with MPS optimization)
+    # FFT features (optimized for CPU performance)
     try:
-        fft_vals = torch.fft.fft(lc_tensor, dim=1)
-        fft_magnitude = torch.abs(fft_vals)
+        if force_cpu:
+            # Use numpy FFT for better CPU performance
+            fft_vals = np.fft.fft(light_curves, axis=1)
+            fft_magnitude = np.abs(fft_vals)
+        else:
+            fft_vals = torch.fft.fft(lc_tensor, dim=1)
+            fft_magnitude = torch.abs(fft_vals)
     except Exception as e:
         if device.type == 'mps':
             print(f"⚠️ MPS FFT failed: {e}")
@@ -162,57 +191,82 @@ def extract_features_vectorized(light_curves):
         else:
             raise e
     
-    # Dominant frequency and power
-    freqs = torch.fft.fftfreq(seq_len, device=device)
+    # Convert to numpy for CPU-only mode
+    if force_cpu:
+        fft_magnitude = torch.from_numpy(fft_magnitude)
+    
+    # Dominant frequency and power (optimized)
+    freqs = torch.fft.fftfreq(seq_len, device=device) if not force_cpu else torch.from_numpy(np.fft.fftfreq(seq_len))
     positive_freq_mask = freqs > 0
     positive_freqs = freqs[positive_freq_mask]
     positive_fft = fft_magnitude[:, positive_freq_mask]
     
-    # Find dominant frequency for each sample
-    dominant_freq_indices = torch.argmax(positive_fft[:, :seq_len//4], dim=1)
+    # Find dominant frequency for each sample (limit search to avoid unnecessary computation)
+    search_limit = min(seq_len//4, 512)  # Limit search to first 512 frequencies for speed
+    dominant_freq_indices = torch.argmax(positive_fft[:, :search_limit], dim=1)
     dominant_freqs = positive_freqs[dominant_freq_indices]
     dominant_power = positive_fft[torch.arange(batch_size), dominant_freq_indices]
     
-    # Power in different frequency bands
-    low_freq_power = torch.sum(positive_fft[:, :seq_len//8], dim=1)
-    mid_freq_power = torch.sum(positive_fft[:, seq_len//8:seq_len//4], dim=1)
-    high_freq_power = torch.sum(positive_fft[:, seq_len//4:seq_len//2], dim=1)
+    # Power in different frequency bands (optimized with fixed indices)
+    band_size = min(seq_len//8, 256)  # Limit band sizes for speed
+    low_freq_power = torch.sum(positive_fft[:, :band_size], dim=1)
+    mid_freq_power = torch.sum(positive_fft[:, band_size:band_size*2], dim=1)
+    high_freq_power = torch.sum(positive_fft[:, band_size*2:band_size*4], dim=1)
     
-    # Spectral centroid
+    # Spectral centroid (simplified for speed)
     spectral_centroid = torch.sum(positive_freqs.unsqueeze(0) * positive_fft, dim=1) / torch.sum(positive_fft, dim=1)
     
-    # Rolling statistics (enhanced with MPS optimization)
+    # Rolling statistics (optimized with cumulative sum approach for O(n) complexity)
     window_size = min(50, seq_len // 4)
     if window_size > 1:
         try:
-            kernel = torch.ones(window_size, device=device) / window_size
-            rolling_mean = torch.nn.functional.conv1d(
-                lc_tensor.unsqueeze(1), 
-                kernel.unsqueeze(0).unsqueeze(0), 
-                padding=window_size//2
-            ).squeeze(1)
+            # Use cumulative sum approach for O(n) rolling mean instead of convolution
+            # Pad the beginning to handle edge effects
+            padded_lc = torch.cat([lc_tensor[:, :1].repeat(1, window_size//2), lc_tensor], dim=1)
+            
+            # Compute cumulative sum
+            cumsum = torch.cumsum(padded_lc, dim=1)
+            
+            # Compute rolling mean using difference of cumulative sums
+            rolling_mean = (cumsum[:, window_size:] - cumsum[:, :-window_size]) / window_size
+            
+            # Ensure we have the right length by truncating if necessary
+            if rolling_mean.shape[1] > seq_len:
+                rolling_mean = rolling_mean[:, :seq_len]
+            elif rolling_mean.shape[1] < seq_len:
+                # Pad with mean values if shorter
+                pad_size = seq_len - rolling_mean.shape[1]
+                pad_values = mean_vals.unsqueeze(1).repeat(1, pad_size)
+                rolling_mean = torch.cat([rolling_mean, pad_values], dim=1)
             
             rolling_mean_mean = torch.mean(rolling_mean, dim=1)
             rolling_mean_std = torch.std(rolling_mean, dim=1)
             rolling_mean_min = torch.min(rolling_mean, dim=1)[0]
             rolling_mean_max = torch.max(rolling_mean, dim=1)[0]
+            
         except Exception as e:
             if device.type == 'mps':
-                print(f"⚠️ MPS convolution failed: {e}")
-                print("   Using CPU for convolution operations")
-                # Fallback to CPU for convolution
+                print(f"⚠️ MPS rolling statistics failed: {e}")
+                print("   Using CPU for rolling statistics operations")
+                # Fallback to CPU for rolling statistics
                 lc_cpu = lc_tensor.cpu()
-                kernel_cpu = torch.ones(window_size) / window_size
-                rolling_mean = torch.nn.functional.conv1d(
-                    lc_cpu.unsqueeze(1), 
-                    kernel_cpu.unsqueeze(0).unsqueeze(0), 
-                    padding=window_size//2
-                ).squeeze(1)
+                mean_cpu = mean_vals.cpu()
                 
-                rolling_mean_mean = torch.mean(rolling_mean, dim=1)
-                rolling_mean_std = torch.std(rolling_mean, dim=1)
-                rolling_mean_min = torch.min(rolling_mean, dim=1)[0]
-                rolling_mean_max = torch.max(rolling_mean, dim=1)[0]
+                padded_lc_cpu = torch.cat([lc_cpu[:, :1].repeat(1, window_size//2), lc_cpu], dim=1)
+                cumsum_cpu = torch.cumsum(padded_lc_cpu, dim=1)
+                rolling_mean_cpu = (cumsum_cpu[:, window_size:] - cumsum_cpu[:, :-window_size]) / window_size
+                
+                if rolling_mean_cpu.shape[1] > seq_len:
+                    rolling_mean_cpu = rolling_mean_cpu[:, :seq_len]
+                elif rolling_mean_cpu.shape[1] < seq_len:
+                    pad_size = seq_len - rolling_mean_cpu.shape[1]
+                    pad_values_cpu = mean_cpu.unsqueeze(1).repeat(1, pad_size)
+                    rolling_mean_cpu = torch.cat([rolling_mean_cpu, pad_values_cpu], dim=1)
+                
+                rolling_mean_mean = torch.mean(rolling_mean_cpu, dim=1)
+                rolling_mean_std = torch.std(rolling_mean_cpu, dim=1)
+                rolling_mean_min = torch.min(rolling_mean_cpu, dim=1)[0]
+                rolling_mean_max = torch.max(rolling_mean_cpu, dim=1)[0]
                 
                 # Move results back to device if needed
                 if device.type == 'mps':
@@ -228,19 +282,22 @@ def extract_features_vectorized(light_curves):
         rolling_mean_min = min_vals
         rolling_mean_max = max_vals
     
-    # Trend analysis (enhanced)
+    # Trend analysis (optimized)
     x = torch.arange(seq_len, device=device).float()
     x_mean = torch.mean(x)
-    y_mean = mean_vals
+    x_centered = x - x_mean
+    x_var = torch.sum(x_centered**2)
     
-    numerator = torch.sum((x.unsqueeze(0) - x_mean) * (lc_tensor - y_mean.unsqueeze(1)), dim=1)
-    denominator = torch.sum((x - x_mean)**2)
-    trend_slopes = numerator / denominator
+    # Pre-compute centered light curves
+    lc_centered = lc_tensor - mean_expanded
     
-    # R-squared for trend fit
-    y_pred = trend_slopes.unsqueeze(1) * (x.unsqueeze(0) - x_mean) + y_mean.unsqueeze(1)
+    numerator = torch.sum(x_centered.unsqueeze(0) * lc_centered, dim=1)
+    trend_slopes = numerator / x_var
+    
+    # R-squared for trend fit (simplified)
+    y_pred = trend_slopes.unsqueeze(1) * x_centered.unsqueeze(0) + mean_expanded
     ss_res = torch.sum((lc_tensor - y_pred)**2, dim=1)
-    ss_tot = torch.sum((lc_tensor - y_mean.unsqueeze(1))**2, dim=1)
+    ss_tot = torch.sum(lc_centered**2, dim=1)
     r_squared = 1 - (ss_res / ss_tot)
     
     # Autocorrelation features (multiple lags)
@@ -248,31 +305,56 @@ def extract_features_vectorized(light_curves):
     autocorr_lag5 = torch.mean(lc_tensor[:, 5:] * lc_tensor[:, :-5], dim=1) / variance_vals
     autocorr_lag10 = torch.mean(lc_tensor[:, 10:] * lc_tensor[:, :-10], dim=1) / variance_vals
     
-    # Periodicity detection (MPS-optimized)
-    # Look for periodic patterns using autocorrelation
+    # Periodicity detection (optimized with FFT-based autocorrelation)
+    # Use FFT-based autocorrelation for O(n log n) complexity instead of O(n²)
     try:
-        autocorr_full = torch.zeros(batch_size, seq_len//2, device=device)
-        for lag in range(1, seq_len//2):
-            if lag < seq_len:
-                autocorr_full[:, lag-1] = torch.mean(lc_tensor[:, lag:] * lc_tensor[:, :-lag], dim=1) / variance_vals
+        if force_cpu:
+            # Use numpy for CPU-optimized autocorrelation
+            fft_lc = np.fft.fft(light_curves, axis=1)
+            autocorr_fft = np.fft.ifft(fft_lc * np.conj(fft_lc), axis=1).real
+            
+            # Normalize by variance
+            autocorr_normalized = autocorr_fft / variance_vals.numpy().reshape(-1, 1)
+            
+            # Take only positive lags (first half)
+            max_lag_idx = seq_len // 2
+            autocorr_positive = autocorr_normalized[:, :max_lag_idx]
+            
+            # Find strongest periodic signal (skip lag 0 which is always 1.0)
+            max_autocorr = np.max(autocorr_positive[:, 1:], axis=1)
+            periodicity_strength = torch.from_numpy(max_autocorr)
+        else:
+            # Compute autocorrelation using FFT: autocorr = IFFT(FFT(x) * conj(FFT(x)))
+            fft_lc = torch.fft.fft(lc_tensor, dim=1)
+            autocorr_fft = torch.fft.ifft(fft_lc * torch.conj(fft_lc), dim=1).real
+            
+            # Normalize by variance
+            autocorr_normalized = autocorr_fft / variance_vals.unsqueeze(1)
+            
+            # Take only positive lags (first half)
+            max_lag_idx = seq_len // 2
+            autocorr_positive = autocorr_normalized[:, :max_lag_idx]
+            
+            # Find strongest periodic signal (skip lag 0 which is always 1.0)
+            max_autocorr, max_lag = torch.max(autocorr_positive[:, 1:], dim=1)
+            periodicity_strength = max_autocorr
         
-        # Find strongest periodic signal
-        max_autocorr, max_lag = torch.max(autocorr_full, dim=1)
-        periodicity_strength = max_autocorr
     except Exception as e:
         if device.type == 'mps':
-            print(f"⚠️ MPS autocorrelation failed: {e}")
-            print("   Using CPU for autocorrelation operations")
-            # Fallback to CPU for autocorrelation
+            print(f"⚠️ MPS FFT autocorrelation failed: {e}")
+            print("   Using CPU for FFT autocorrelation operations")
+            # Fallback to CPU for FFT autocorrelation
             lc_cpu = lc_tensor.cpu()
             variance_cpu = variance_vals.cpu()
-            autocorr_full = torch.zeros(batch_size, seq_len//2)
-            for lag in range(1, seq_len//2):
-                if lag < seq_len:
-                    autocorr_full[:, lag-1] = torch.mean(lc_cpu[:, lag:] * lc_cpu[:, :-lag], dim=1) / variance_cpu
             
-            max_autocorr, max_lag = torch.max(autocorr_full, dim=1)
-            periodicity_strength = max_autocorr.to(device) if device.type == 'mps' else max_autocorr
+            fft_lc_cpu = torch.fft.fft(lc_cpu, dim=1)
+            autocorr_fft_cpu = torch.fft.ifft(fft_lc_cpu * torch.conj(fft_lc_cpu), dim=1).real
+            autocorr_normalized_cpu = autocorr_fft_cpu / variance_cpu.unsqueeze(1)
+            
+            max_lag_idx = seq_len // 2
+            autocorr_positive_cpu = autocorr_normalized_cpu[:, :max_lag_idx]
+            max_autocorr_cpu, max_lag_cpu = torch.max(autocorr_positive_cpu[:, 1:], dim=1)
+            periodicity_strength = max_autocorr_cpu.to(device) if device.type == 'mps' else max_autocorr_cpu
         else:
             raise e
     
