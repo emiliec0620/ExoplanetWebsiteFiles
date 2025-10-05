@@ -189,6 +189,7 @@ if __name__ == "__main__":
         model.train()
         train_loss = 0.0
         for batch_idx, (data, target) in enumerate(train_loader):
+            print(f"Training batch {batch_idx+1}/{len(train_loader)}")
             data, target = data.to(device), target.to(device)
             
             optimizer.zero_grad()

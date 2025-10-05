@@ -37,7 +37,7 @@ class PositionalEncoding(nn.Module):
 
 class LightCurveTransformer(nn.Module):
     """Transformer-based model for light curve classification."""
-    def __init__(self, input_size=2048, d_model=256, nhead=8, num_layers=4, dropout=0.1):
+    def __init__(self, input_size=128, d_model=256, nhead=8, num_layers=4, dropout=0.1):
         super(LightCurveTransformer, self).__init__()
         
         self.d_model = d_model

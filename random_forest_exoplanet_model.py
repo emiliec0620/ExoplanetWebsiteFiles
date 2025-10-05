@@ -290,6 +290,7 @@ def extract_features_vectorized(light_curves):
         trend_slopes, r_squared,
         autocorr_lag1, autocorr_lag5, autocorr_lag10, periodicity_strength
     ], dim=1)
+    print(f"Features: {features}")
     
     return features.cpu().numpy()
 

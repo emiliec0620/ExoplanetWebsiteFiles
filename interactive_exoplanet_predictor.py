@@ -10,6 +10,7 @@ import pandas as pd
 import sys
 import os
 import pickle
+import json
 from io import StringIO
 from scipy import interpolate
 from preprocess_data import load_preprocessed_data
@@ -468,6 +469,195 @@ class ExoplanetPredictor:
         
         return probability
 
+    def predict_from_fits_file(self, fits_path):
+        """Load a .fits light curve file and make a prediction.
+
+        Supports common Kepler/TESS light curve formats. Attempts to find TIME and
+        a flux-like column (PDCSAP_FLUX, SAP_FLUX, FLUX). Normalizes and resamples
+        to 2048 points before feature extraction.
+        """
+        try:
+            result = self._load_flux_from_fits(fits_path)
+            if result is None:
+                return None
+            flux_resampled, meta = result
+
+            # Extract features and predict
+            features = extract_features_vectorized(np.array([flux_resampled]))
+            features_scaled = self.scaler.transform(features)
+            probability = self.model.predict_proba(features_scaled)[0, 1]
+
+            if probability > 0.8 or probability < 0.2:
+                confidence = "High"
+            elif probability > 0.6 or probability < 0.4:
+                confidence = "Medium"
+            else:
+                confidence = "Low"
+
+            prediction = "EXOPLANET" if probability > 0.5 else "NOT EXOPLANET"
+
+            print(f"✅ FITS processed: {os.path.basename(fits_path)}")
+            print(f"   Time column: {meta.get('time_col')}, Flux column: {meta.get('flux_col')}")
+            print(f"   Data points (resampled): {len(flux_resampled)}")
+            print(f"   Probability: {probability:.4f} ({probability*100:.2f}%)")
+            print(f"   Prediction: {prediction}")
+            print(f"   Confidence: {confidence}")
+
+            return {
+                'probability': probability,
+                'confidence': confidence,
+                'prediction': prediction,
+                'data_points': len(flux_resampled),
+                'data_type': 'fits'
+            }
+        except Exception as e:
+            print(f"❌ Error processing FITS file: {e}")
+            return None
+
+    def _load_flux_from_fits(self, fits_path):
+        """Helper: load and resample flux from a FITS file; returns (flux_2048, meta)."""
+        try:
+            try:
+                from astropy.io import fits
+            except Exception:
+                print("❌ astropy is not installed. Install it with: pip install astropy")
+                return None
+
+            if not os.path.exists(fits_path):
+                print(f"❌ File not found: {fits_path}")
+                return None
+
+            with fits.open(fits_path, memmap=False) as hdul:
+                table_hdu = None
+                for hdu in hdul:
+                    if hasattr(hdu, 'data') and hdu.data is not None:
+                        cols = [c.name.upper() for c in getattr(hdu, 'columns', [])]
+                        if 'TIME' in cols:
+                            table_hdu = hdu
+                            break
+                if table_hdu is None:
+                    for hdu in hdul:
+                        if hdu.__class__.__name__ == 'BinTableHDU' and hdu.data is not None:
+                            table_hdu = hdu
+                            break
+                if table_hdu is None or table_hdu.data is None:
+                    print("❌ No table HDU with light curve data found in FITS file")
+                    return None
+
+                data = table_hdu.data
+                colnames = [name.upper() for name in data.columns.names]
+
+                time_col_name = None
+                for candidate in ['TIME', 'BJD', 'TMID', 'T', 'JD']:
+                    if candidate in colnames:
+                        time_col_name = candidate
+                        break
+                if time_col_name is None:
+                    print(f"❌ Could not find a time column in FITS (available: {colnames})")
+                    return None
+
+                flux_col_name = None
+                for candidate in ['PDCSAP_FLUX', 'SAP_FLUX', 'FLUX', 'DET_FLUX', 'LC_DETREND', 'NORMFLUX', 'SAP_FLUX_CORR']:
+                    if candidate in colnames:
+                        flux_col_name = candidate
+                        break
+                if flux_col_name is None:
+                    for candidate in ['INTENSITY', 'COUNTS']:
+                        if candidate in colnames:
+                            flux_col_name = candidate
+                            break
+                if flux_col_name is None:
+                    print(f"❌ Could not find a flux column in FITS (available: {colnames})")
+                    return None
+
+                time = np.array(data[time_col_name], dtype=float)
+                flux = np.array(data[flux_col_name], dtype=float)
+
+                valid_mask = ~(np.isnan(time) | np.isnan(flux) | np.isinf(time) | np.isinf(flux))
+                time = time[valid_mask]
+                flux = flux[valid_mask]
+
+                if len(flux) < 100:
+                    print(f"❌ Insufficient data points in FITS ({len(flux)}). Need at least 100 points.")
+                    return None
+
+                median_flux = np.median(flux)
+                if median_flux != 0 and (median_flux > 10 or median_flux < 0.1):
+                    flux = flux / median_flux
+                flux = flux / np.median(flux)
+
+                if len(flux) != 2048:
+                    x_old = np.linspace(0, 1, len(flux))
+                    x_new = np.linspace(0, 1, 2048)
+                    f = interpolate.interp1d(x_old, flux, kind='linear', bounds_error=False, fill_value='extrapolate')
+                    flux_resampled = f(x_new)
+                else:
+                    flux_resampled = flux
+
+                meta = {'time_col': time_col_name, 'flux_col': flux_col_name}
+                return flux_resampled, meta
+        except Exception as e:
+            print(f"❌ Error reading FITS file: {e}")
+            return None
+
+    def analyze_fits_with_gemini(self, fits_path):
+        """Extract features from FITS and ask Gemini for an assessment with JSON output."""
+        result = self._load_flux_from_fits(fits_path)
+        if result is None:
+            return None
+        flux_resampled, meta = result
+
+        # Build feature vector
+        features = np.array(extract_features_vectorized(np.array([flux_resampled]))[0].tolist())
+        formatted_arr_fstr = np.array([f"{x:.3e}" for x in features])
+
+        # Prepare Gemini client
+        api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
+        if not api_key:
+            print("❌ Missing Gemini API key. Set GEMINI_API_KEY or GOOGLE_API_KEY environment variable.")
+            return None
+        try:
+            from google import genai
+            client = genai.Client()
+        except Exception as e:
+            print(f"❌ Gemini SDK not available or failed to initialize: {e}")
+            print("   Install with: pip install google-generativeai")
+            return None
+
+        # Strict JSON schema
+        expected_schema = {
+            "type": "object",
+            "properties": {
+                "assessment": {"type": "string"},
+                "confidence": {"type": "string", "enum": ["Low", "Medium", "High"]},
+                "reasoning": {"type": "string"},
+                "notable_features": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["assessment", "confidence", "reasoning"],
+            "additionalProperties": False
+        }
+
+        system_instructions = (
+            "You are an astrophysics assistant analyzing exoplanet transit light curve features. "
+            "Given a numeric feature vector extracted from a light curve, provide a concise assessment "
+            "of whether the signal suggests an exoplanet transit, with a confidence level. Return strictly JSON only."
+        )
+
+        prompt = f"Is this a exoplanet based on this format: features = torch.stack([mean_vals, std_vals, min_vals, max_vals, median_vals, q10_vals, q25_vals, q75_vals, q90_vals, dips_1sigma.float(), dips_2sigma.float(), dips_3sigma.float(), peaks_1sigma.float(), peaks_2sigma.float(), transit_depth_1sigma, transit_depth_2sigma, transit_depth_min, variance_vals, rmse_vals, skewness, kurtosis, dominant_freqs, dominant_power, spectral_centroid, low_freq_power, mid_freq_power, high_freq_power, rolling_mean_mean, rolling_mean_std, rolling_mean_min, rolling_mean_max, trend_slopes, r_squared, autocorr_lag1, autocorr_lag5, autocorr_lag10, periodicity_strength], dim=1) {formatted_arr_fstr}"
+
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt
+            )
+            print(response)
+            return response
+            # print(prompt)
+            # return prompt
+        except Exception as e:
+            print(f"❌ Failed to parse Gemini response: {e}")
+            return None
+
 def main():
     """Main interactive function."""
     print("🔬 Interactive Exoplanet Prediction Tool")
@@ -486,9 +676,11 @@ def main():
         print("2. Get predictions from real TESS data")
         print("3. Show feature importance analysis")
         print("4. Analyze specific light curve")
-        print("5. Exit")
+        print("5. Load .fits light curve file")
+        print("6. Analyze .fits with Gemini (JSON)")
+        print("7. Exit")
         
-        choice = input("\nEnter your choice (1-5): ").strip()
+        choice = input("\nEnter your choice (1-7): ").strip()
         
         if choice == '1':
             print("\n📋 Paste your CSV data below (press Ctrl+D or Ctrl+Z when done):")
@@ -517,7 +709,7 @@ def main():
                         print(f"   Probability: {result['probability']:.4f} ({result['probability']*100:.2f}%)")
                         print(f"   Prediction: {result['prediction']}")
                         print(f"   Confidence: {result['confidence']}")
-                        print(f"   Based on {result['real_data_samples']} real TESS samples")
+                        
             else:
                 print("❌ No CSV data provided")
         
@@ -569,6 +761,21 @@ def main():
                 print("❌ No real data available")
         
         elif choice == '5':
+            print("\n🗂️  Load .fits Light Curve File")
+            fits_path = input("Enter path to .fits file: ").strip()
+            result = predictor.predict_from_fits_file(fits_path)
+            if result:
+                print(f"\n🎯 Final Result:")
+                print(f"   Probability: {result['probability']:.4f} ({result['probability']*100:.2f}%)")
+                print(f"   Prediction: {result['prediction']}")
+                print(f"   Confidence: {result['confidence']}")
+
+        elif choice == '6':
+            print("\n🤖 Analyze .fits with Gemini")
+            fits_path = input("Enter path to .fits file: ").strip()
+            _ = predictor.analyze_fits_with_gemini(fits_path)
+
+        elif choice == '7':
             print("\n👋 Goodbye!")
             break
         
