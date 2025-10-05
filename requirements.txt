@@ -8,7 +8,7 @@ pandas>=2.0.0
 
 # Astronomy
 astropy>=6.0.0
-lightkurve>=3.0.0
+lightkurve
 astroquery>=0.4.0
 
 # Machine Learning
