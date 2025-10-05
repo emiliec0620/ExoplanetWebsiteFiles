@@ -12,8 +12,33 @@ from flask import Flask, request, jsonify, Response
 
 # Reuse existing vectorized feature extractor
 from random_forest_exoplanet_model import extract_features_vectorized
+import pickle
+import os
 
 app = Flask(__name__)
+
+# Load Random Forest model for predictions
+RF_MODEL_PATH = "random_forest_exoplanet_model.pkl"
+rf_model = None
+rf_scaler = None
+
+def load_rf_model():
+    """Load the trained Random Forest model."""
+    global rf_model, rf_scaler
+    try:
+        if os.path.exists(RF_MODEL_PATH):
+            with open(RF_MODEL_PATH, 'rb') as f:
+                model_data = pickle.load(f)
+            rf_model = model_data['model']
+            rf_scaler = model_data['scaler']
+            print(f"✅ Random Forest model loaded from {RF_MODEL_PATH}")
+        else:
+            print(f"⚠️ Random Forest model not found at {RF_MODEL_PATH}")
+    except Exception as e:
+        print(f"❌ Error loading Random Forest model: {e}")
+
+# Load model on startup
+load_rf_model()
 
 
 def load_flux_from_fits_bytes(file_bytes):
@@ -126,6 +151,13 @@ def index():
         <button type="submit">Upload & Extract</button>
         <button id="open-gemini" type="button" disabled>Open in Gemini</button>
       </form>
+      
+      <div id="prediction-display" style="display: none; margin: 20px 0; padding: 20px; border-radius: 12px; text-align: center;">
+        <h2 id="prediction-text" style="font-size: 2.5rem; margin: 0; font-weight: bold;"></h2>
+        <p id="prediction-confidence" style="font-size: 1.2rem; margin: 10px 0 0; opacity: 0.8;"></p>
+        <p id="prediction-probability" style="font-size: 1rem; margin: 5px 0 0; opacity: 0.6;"></p>
+      </div>
+      
       <h3>Response</h3>
       <pre id="output"></pre>
     </div>
@@ -133,7 +165,12 @@ def index():
       const form = document.getElementById('upload-form');
       const output = document.getElementById('output');
       const openGeminiBtn = document.getElementById('open-gemini');
+      const predictionDisplay = document.getElementById('prediction-display');
+      const predictionText = document.getElementById('prediction-text');
+      const predictionConfidence = document.getElementById('prediction-confidence');
+      const predictionProbability = document.getElementById('prediction-probability');
       let lastGeminiPrompt = '';
+      
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const fileInput = document.getElementById('file');
@@ -141,10 +178,33 @@ def index():
         const fd = new FormData();
         fd.append('file', fileInput.files[0]);
         output.textContent = 'Uploading...';
+        predictionDisplay.style.display = 'none';
+        
         try {
           const res = await fetch('/api/extract', { method: 'POST', body: fd });
           const json = await res.json();
           output.textContent = JSON.stringify(json, null, 2);
+          
+          // Show Random Forest prediction prominently
+          if (json.random_forest_prediction) {
+            const pred = json.random_forest_prediction;
+            predictionText.textContent = pred.prediction;
+            predictionConfidence.textContent = `Confidence: ${pred.confidence}`;
+            predictionProbability.textContent = `Probability: ${(pred.probability * 100).toFixed(1)}%`;
+            
+            // Color coding
+            if (pred.prediction === 'EXOPLANET') {
+              predictionDisplay.style.backgroundColor = '#dcfce7';
+              predictionDisplay.style.borderColor = '#16a34a';
+              predictionText.style.color = '#16a34a';
+            } else {
+              predictionDisplay.style.backgroundColor = '#fef2f2';
+              predictionDisplay.style.borderColor = '#dc2626';
+              predictionText.style.color = '#dc2626';
+            }
+            predictionDisplay.style.display = 'block';
+          }
+          
           if (json.gemini_prompt_human) {
             lastGeminiPrompt = json.gemini_prompt_human;
             openGeminiBtn.disabled = false;
@@ -154,6 +214,7 @@ def index():
         } catch (err) {
           output.textContent = 'Request failed: ' + err;
           openGeminiBtn.disabled = true;
+          predictionDisplay.style.display = 'none';
         }
       });
 
@@ -192,6 +253,30 @@ def api_extract():
         features = extract_features_vectorized(np.array([flux_resampled]))[0]
     except Exception as e:
         return jsonify({"error": f"Feature extraction failed: {e}"}), 500
+
+    # Get Random Forest prediction if model is available
+    rf_prediction = None
+    if rf_model is not None and rf_scaler is not None:
+        try:
+            features_scaled = rf_scaler.transform([features])
+            probability = rf_model.predict_proba(features_scaled)[0, 1]
+            
+            if probability > 0.8 or probability < 0.2:
+                confidence = "High"
+            elif probability > 0.6 or probability < 0.4:
+                confidence = "Medium"
+            else:
+                confidence = "Low"
+            
+            prediction = "EXOPLANET" if probability > 0.5 else "NOT EXOPLANET"
+            
+            rf_prediction = {
+                "probability": float(probability),
+                "confidence": confidence,
+                "prediction": prediction
+            }
+        except Exception as e:
+            print(f"⚠️ Random Forest prediction failed: {e}")
 
     # Prepare JSON-safe outputs
     flux_list = flux_resampled.astype(float).tolist()
@@ -253,6 +338,11 @@ def api_extract():
         "gemini_prompt": gemini_prompt,
         "gemini_prompt_human": gemini_prompt_human
     }
+    
+    # Add Random Forest prediction if available
+    if rf_prediction is not None:
+        response["random_forest_prediction"] = rf_prediction
+    
     return jsonify(response)
 
 
