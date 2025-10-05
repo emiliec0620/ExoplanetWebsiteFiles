@@ -1,4 +1,11 @@
-tess_lightcurves/
+tess_lightcurves/**
+preprocessed_data/**
 preprocessed_data/
 tfopwg_dispositions.csv
+kepler_dispositions.csv
 tess_lightcurves.zip
+kepler_lightcurves/**
+preprocessed_kepler_data/**
+**/__pycache__/**
+**/*.pyc
+**/.DS_Store
